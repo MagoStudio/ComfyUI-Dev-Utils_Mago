@@ -24,11 +24,17 @@ function startRefreshTimer() {
 // endregion
 
 function formatExecutionTime(time) {
+    if (time === undefined || time === null || isNaN(time)) {
+        return 'N/A'
+    }
     return `${(time / 1000.0).toFixed(2)}s`
 }
 
 // Reference: https://gist.github.com/zentala/1e6f72438796d74531803cc3833c039c
 function formatBytes(bytes, decimals) {
+    if (bytes === undefined || bytes === null || isNaN(bytes)) {
+        return 'N/A'
+    }
     if (bytes === 0) {
         return '0 B'
     }
@@ -48,7 +54,11 @@ function drawBadge(node, orig, restArgs) {
     if (!node.flags.collapsed && node.constructor.title_mode != LiteGraph.NO_TITLE) {
         let text = "";
         if (node.ty_et_execution_time !== undefined) {
-            text = formatExecutionTime(node.ty_et_execution_time) + " - vram " + formatBytes(node.ty_et_vram_used, 2);
+            text = formatExecutionTime(node.ty_et_execution_time);
+            if (node.ty_et_cpu_time_used !== undefined) {
+                text += " | CPU " + formatExecutionTime(node.ty_et_cpu_time_used);
+            }
+            text += " | VRAM " + formatBytes(node.ty_et_vram_used, 2);
         } else if (node.ty_et_start_time !== undefined) {
             text = formatExecutionTime(LiteGraph.getTime() - node.ty_et_start_time);
         }
@@ -154,7 +164,9 @@ function buildTableHtml() {
                 $el("th", {style: headerThStyle, "textContent": "Current Time"}),
                 $el("th", {style: headerThStyle, "textContent": "Per Time"}),
                 $el("th", {style: headerThStyle, "textContent": "Cur / Pre Time Diff"}),
-                $el("th", {style: headerThStyle, "textContent": "VRAM Used"})
+                $el("th", {style: headerThStyle, "textContent": "VRAM Used"}),
+                $el("th", {style: headerThStyle, "textContent": "CPU Time"}),
+                $el("th", {style: headerThStyle, "textContent": "RAM Used"})
             ])
         ]),
         tableBody,
@@ -186,6 +198,8 @@ function buildTableHtml() {
 
     let max_execution_time = null
     let max_vram_used = null
+    let max_cpu_time = null
+    let max_ram_used = null
 
     runningData.nodes_execution_time.forEach(function (item) {
         const nodeId = item.node;
@@ -201,6 +215,17 @@ function buildTableHtml() {
 
         if (max_vram_used == null || item.vram_used > max_vram_used) {
             max_vram_used = item.vram_used
+        }
+
+        const cpuUsed = item.cpu_time_used ?? 0;
+        const ramUsed = item.ram_used ?? 0;
+
+        if (max_cpu_time == null || cpuUsed > max_cpu_time) {
+            max_cpu_time = cpuUsed;
+        }
+
+        if (max_ram_used == null || ramUsed > max_ram_used) {
+            max_ram_used = ramUsed;
         }
 
         tableBody.append($el("tr", {
@@ -226,6 +251,8 @@ function buildTableHtml() {
                 "textContent": diffText
             }),
             $el("td", {style: {"textAlign": "right"}, "textContent": formatBytes(item.vram_used, 2)}),
+            $el("td", {style: {"textAlign": "right"}, "textContent": formatExecutionTime(item.cpu_time_used || 0)}),
+            $el("td", {style: {"textAlign": "right"}, "textContent": formatBytes(item.ram_used || 0, 2)}),
         ]))
     });
     if (runningData.total_execution_time !== null) {
@@ -253,6 +280,8 @@ function buildTableHtml() {
                 style: {"textAlign": "right"},
                 "textContent": max_vram_used != null ? formatBytes(max_vram_used, 2) : ''
             }),
+            $el("td", {style: {"textAlign": "right"}, "textContent": max_cpu_time != null ? formatExecutionTime(max_cpu_time) : ''}),
+            $el("td", {style: {"textAlign": "right"}, "textContent": max_ram_used != null ? formatBytes(max_ram_used, 2) : ''}),
         ]))
 
         tableFooter.append($el("tr", [
@@ -273,7 +302,9 @@ function buildTableHtml() {
                 },
                 "textContent": diffText
             }),
-            $el("td", {style: {"textAlign": "right"}, "textContent": ""}),
+            $el("td", {style: {"textAlign": "right"}, "textContent": formatBytes(runningData.total_vram_used || 0, 2)}),
+            $el("td", {style: {"textAlign": "right"}, "textContent": formatExecutionTime(runningData.total_cpu_time || 0)}),
+            $el("td", {style: {"textAlign": "right"}, "textContent": formatBytes(runningData.total_ram_used || 0, 2)}),
         ]))
     }
     return table;
@@ -315,12 +346,16 @@ app.registerExtension({
             if (node) {
                 node.ty_et_execution_time = detail.execution_time;
                 node.ty_et_vram_used = detail.vram_used;
+                node.ty_et_cpu_time_used = detail.cpu_time_used;
+                node.ty_et_ram_used = detail.ram_used;
             }
             const index = runningData.nodes_execution_time.findIndex(x => x.node === detail.node);
             const data = {
                 node: detail.node,
                 execution_time: detail.execution_time,
-                vram_used: detail.vram_used
+                vram_used: detail.vram_used,
+                cpu_time_used: detail.cpu_time_used,
+                ram_used: detail.ram_used
             };
             if (index > 0) {
                 runningData.nodes_execution_time[index] = data
@@ -339,10 +374,15 @@ app.registerExtension({
                 delete node.ty_et_start_time
                 delete node.ty_et_execution_time
                 delete node.ty_et_vram_used
+                delete node.ty_et_cpu_time_used
+                delete node.ty_et_ram_used
             });
             runningData = {
                 nodes_execution_time: [],
-                total_execution_time: null
+                total_execution_time: null,
+                total_cpu_time: null,
+                total_ram_used: null,
+                total_vram_used: null,
             };
             startRefreshTimer();
         });
@@ -350,6 +390,9 @@ app.registerExtension({
         api.addEventListener("TyDev-Utils.ExecutionTime.execution_end", ({detail}) => {
             stopRefreshTimer();
             runningData.total_execution_time = detail.execution_time;
+            runningData.total_cpu_time = detail.cpu_time_used;
+            runningData.total_ram_used = detail.ram_used;
+            runningData.total_vram_used = detail.total_vram_used;
             refreshTable();
         })
     },

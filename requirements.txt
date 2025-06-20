@@ -1,1 +1,2 @@
 aiohttp-sse
+psutil>=5.9
